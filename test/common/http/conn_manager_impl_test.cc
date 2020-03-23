@@ -26,6 +26,7 @@
 
 #include "extensions/access_loggers/file/file_access_log_impl.h"
 
+#include "test/common/http/conn_manager_impl_common.h"
 #include "test/mocks/access_log/mocks.h"
 #include "test/mocks/buffer/mocks.h"
 #include "test/mocks/common.h"
@@ -64,22 +65,10 @@ namespace Http {
 
 class HttpConnectionManagerImplTest : public testing::Test, public ConnectionManagerConfig {
 public:
-  struct RouteConfigProvider : public Router::RouteConfigProvider {
-    RouteConfigProvider(TimeSource& time_source) : time_source_(time_source) {}
-
-    // Router::RouteConfigProvider
-    Router::ConfigConstSharedPtr config() override { return route_config_; }
-    absl::optional<ConfigInfo> configInfo() const override { return {}; }
-    SystemTime lastUpdated() const override { return time_source_.systemTime(); }
-    void onConfigUpdate() override {}
-
-    TimeSource& time_source_;
-    std::shared_ptr<Router::MockConfig> route_config_{new NiceMock<Router::MockConfig>()};
-  };
-
   HttpConnectionManagerImplTest()
-      : route_config_provider_(test_time_.timeSystem()), http_context_(fake_stats_.symbolTable()),
-        access_log_path_("dummy_path"),
+      : route_config_provider_(test_time_.timeSystem()),
+        scoped_route_config_provider_(test_time_.timeSystem()),
+        http_context_(fake_stats_.symbolTable()), access_log_path_("dummy_path"),
         access_logs_{
             AccessLog::InstanceSharedPtr{new Extensions::AccessLoggers::File::FileAccessLog(
                 access_log_path_, {}, AccessLog::AccessLogFormatUtils::defaultAccessLogFormatter(),
@@ -258,12 +247,16 @@ public:
   std::chrono::milliseconds drainTimeout() override { return std::chrono::milliseconds(100); }
   FilterChainFactory& filterFactory() override { return filter_factory_; }
   bool generateRequestId() override { return true; }
+  bool preserveExternalRequestId() const override { return false; }
   uint32_t maxRequestHeadersKb() const override { return max_request_headers_kb_; }
   absl::optional<std::chrono::milliseconds> idleTimeout() const override { return idle_timeout_; }
   std::chrono::milliseconds streamIdleTimeout() const override { return stream_idle_timeout_; }
   std::chrono::milliseconds requestTimeout() const override { return request_timeout_; }
   std::chrono::milliseconds delayedCloseTimeout() const override { return delayed_close_timeout_; }
-  Router::RouteConfigProvider& routeConfigProvider() override { return route_config_provider_; }
+  Router::RouteConfigProvider* routeConfigProvider() override { return &route_config_provider_; }
+  Config::ConfigProvider* scopedRouteConfigProvider() override {
+    return &scoped_route_config_provider_;
+  }
   const std::string& serverName() override { return server_name_; }
   ConnectionManagerStats& stats() override { return stats_; }
   ConnectionManagerTracingStats& tracingStats() override { return tracing_stats_; }
@@ -287,7 +280,8 @@ public:
   bool shouldNormalizePath() const override { return normalize_path_; }
 
   DangerousDeprecatedTestTime test_time_;
-  RouteConfigProvider route_config_provider_;
+  ConnectionManagerImplHelper::RouteConfigProvider route_config_provider_;
+  ConnectionManagerImplHelper::ScopedRouteConfigProvider scoped_route_config_provider_;
   NiceMock<Tracing::MockHttpTracer> tracer_;
   Stats::IsolatedStoreImpl fake_stats_;
   Http::ContextImpl http_context_;
@@ -329,6 +323,7 @@ public:
   Stats::IsolatedStoreImpl fake_listener_stats_;
   ConnectionManagerListenerStats listener_stats_;
   bool proxy_100_continue_ = false;
+  bool preserve_external_request_id_ = false;
   Http::Http1Settings http1_settings_;
   bool normalize_path_ = false;
   NiceMock<Network::MockClientConnection> upstream_conn_; // for websocket tests
